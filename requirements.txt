@@ -1,0 +1,22 @@
+# core
+duckdb
+pandas
+numpy
+
+# config
+pydantic
+python-dotenv
+
+# scraping / http (for later)
+requests
+beautifulsoup4
+lxml
+
+# file parsing
+openpyxl      # xlsx
+tabula-py     # if you later parse PDFs into tables (requires Java)
+
+# optional now, useful later for web scraping
+playwright
+pydantic>=2.0
+pydantic-settings>=2.0

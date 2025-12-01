@@ -1,1 +1,0 @@
-# TWAP, VWAP algorithms

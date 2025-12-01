@@ -1,1 +1,0 @@
-# Base scraper class with common functionality

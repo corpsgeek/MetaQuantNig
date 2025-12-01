@@ -1,1 +1,0 @@
-# TimescaleDB specific operations for tick data

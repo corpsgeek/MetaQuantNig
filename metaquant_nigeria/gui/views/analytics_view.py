@@ -1,1 +1,0 @@
-# Performance charts and metrics

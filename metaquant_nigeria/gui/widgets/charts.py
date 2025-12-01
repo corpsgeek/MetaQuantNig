@@ -1,1 +1,0 @@
-# Matplotlib/Plotly chart widgets
