@@ -1,0 +1,1 @@
+# Constants (tickers, sectors, etc.)
