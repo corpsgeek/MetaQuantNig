@@ -71,3 +71,14 @@ class PriceRepository:
 
         with get_connection(self.db_path) as con:
             return con.execute(query, params).df()
+    
+    def fetch_latest(self):
+        query = """
+        SELECT *
+        FROM eod_prices
+        WHERE date = (SELECT max(date) FROM eod_prices)
+        ORDER BY symbol
+        """
+        from ..connection import get_connection
+        with get_connection(self.db_path) as con:
+            return con.execute(query).df()
