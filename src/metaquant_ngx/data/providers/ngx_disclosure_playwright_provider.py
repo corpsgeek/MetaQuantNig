@@ -6,66 +6,35 @@ from typing import Optional
 from urllib.parse import urljoin
 
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 from ...core.config import settings
 
-# Pretend to be a normal browser to avoid 403
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;"
-        "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://ngxgroup.com/",
-}
 
-class NgxDisclosureProvider:
+class NgxDisclosurePlaywrightProvider:
     """
-    Scrapes NGX corporate disclosures page and returns a DataFrame.
-
-    Output columns:
-        company_name
-        symbol           (currently None; can be mapped later)
-        disclosure_title
-        disclosure_type
-        disclosure_date  (datetime.date or None)
-        source_url
-        pdf_url
-        local_pdf_path   (filled later when we download PDFs)
+    Uses Playwright (real browser) to load the NGX corporate disclosures page
+    so we can see JS-rendered tables.
     """
 
     def __init__(self, base_url: str | None = None) -> None:
         self.base_url = base_url or settings.NGX_CORP_DISCLOSURES_URL
 
     def fetch_page(self) -> pd.DataFrame:
-        """Fetch and parse the corporate disclosures table."""
-        resp = requests.get(self.base_url, headers=DEFAULT_HEADERS, timeout=30)
-        if resp.status_code == 403:
-            raise RuntimeError(
-                f"Got 403 Forbidden from {self.base_url}. "
-                "NGX is likely blocking non-browser requests. "
-                "You may need to switch to a headless browser (Playwright)."
-            )
-        resp.raise_for_status()
+        """Load page via Chromium, parse disclosures table into a DataFrame."""
+        html = self._fetch_html_via_browser()
+        soup = BeautifulSoup(html, "lxml")
 
-        soup = BeautifulSoup(resp.text, "lxml")
-
-        # Find all tables and pick the one whose header looks like:
-        # "Company | Disclosures | Date Submitted"
         tables = soup.find_all("table")
         if not tables:
-            raise RuntimeError("No <table> elements found on NGX disclosures page.")
+            print("Debug: no <table> tags found in rendered HTML.")
+            return pd.DataFrame()
 
+        # Find the table whose headers look like "Company | Disclosures | Date Submitted"
         disclosures_table = None
-        for table in tables:
-            header_row = table.find("tr")
+        for t in tables:
+            header_row = t.find("tr")
             if not header_row:
                 continue
 
@@ -73,25 +42,24 @@ class NgxDisclosureProvider:
                 th.get_text(strip=True).lower()
                 for th in header_row.find_all(["th", "td"])
             ]
+            if not header_cells:
+                continue
 
-            # Heuristic: must contain at least "company" and "disclosures" or "date"
-            has_company = any("company" in h for h in header_cells)
-            has_disclosures = any("disclosure" in h for h in header_cells)
+            has_company = any("company" in h or "issuer" in h for h in header_cells)
+            has_disclosures = any("disclosure" in h or "headline" in h or "subject" in h for h in header_cells)
             has_date = any("date" in h for h in header_cells)
 
             if has_company and (has_disclosures or has_date):
-                disclosures_table = table
+                disclosures_table = t
                 break
 
         if disclosures_table is None:
-            raise RuntimeError(
-                "Could not find the corporate disclosures table. "
-                "Check that the page structure hasn't changed."
-            )
+            print("Debug: could not find disclosures table based on headers.")
+            return pd.DataFrame()
 
-        # Now parse that specific table
         rows = disclosures_table.find_all("tr")
         if len(rows) <= 1:
+            print("Debug: disclosures table has no data rows.")
             return pd.DataFrame()
 
         header_cells = [
@@ -138,7 +106,7 @@ class NgxDisclosureProvider:
             data.append(
                 {
                     "company_name": company_name or None,
-                    "symbol": None,  # to be mapped later
+                    "symbol": None,  # we'll map later
                     "disclosure_title": title or None,
                     "disclosure_type": disclosure_type,
                     "disclosure_date": disclosure_date,
@@ -149,22 +117,24 @@ class NgxDisclosureProvider:
             )
 
         df = pd.DataFrame(data)
-
-        # Keep only rows with some useful content
-        if not df.empty:
-            df = df[df["disclosure_title"].notna()]
-            # Don't strictly require source_url – some rows may not have a link
-            # df = df[df["source_url"].notna()]
-
+        df = df[df["disclosure_title"].notna()]  # keep only real rows
+        print(f"Debug: parsed {len(df)} disclosure rows from rendered HTML.")
         return df.reset_index(drop=True)
 
+    def _fetch_html_via_browser(self) -> str:
+        """Use Playwright Chromium to render the page and return HTML."""
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(self.base_url, wait_until="networkidle")
+            html = page.content()
+            browser.close()
+        return html
 
     @staticmethod
     def _parse_date(text: str) -> Optional[date]:
-        """Try several date formats used on NGX; return None if parsing fails."""
         if not text:
             return None
-
         text = text.strip()
         formats = [
             "%d-%b-%Y",
@@ -179,23 +149,3 @@ class NgxDisclosureProvider:
             except ValueError:
                 continue
         return None
-
-    def download_pdf(self, pdf_url: str, dest_dir: Path) -> Optional[Path]:
-        """Download a PDF if pdf_url is non-empty; return local Path or None."""
-        if not pdf_url:
-            return None
-
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        filename = pdf_url.split("/")[-1].split("?")[0] or "filing.pdf"
-        dest_path = dest_dir / filename
-
-        if dest_path.exists():
-            return dest_path
-
-        resp = requests.get(pdf_url, timeout=60)
-        resp.raise_for_status()
-        with open(dest_path, "wb") as f:
-            f.write(resp.content)
-
-        return dest_path

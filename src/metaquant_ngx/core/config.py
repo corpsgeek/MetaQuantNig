@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     # Where raw NGX EOD files are stored (CSV/XLSX/PDF)
     NGX_EOD_DATA_DIR: str = "data/raw/ngx_eod"
 
+    # NGX corporate disclosures page
+    NGX_CORP_DISCLOSURES_URL: str = (
+        "https://ngxgroup.com/exchange/data/corporate-disclosures/"
+    )
+
+    # Where to store downloaded disclosure PDFs
+    NGX_DISCLOSURES_DATA_DIR: str = "data/raw/ngx_disclosures"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
